@@ -15,7 +15,7 @@ import { GetMintsRedeemsAndSwaps, GetNFTxTokens, NFTxToken } from './utils/NFTx'
 
 import { ethers } from 'ethers';
 import fs from 'fs';
-import { routerContract } from './routerContract';
+import { routerContract } from './contracts/routerContract';
 
 
 main();
