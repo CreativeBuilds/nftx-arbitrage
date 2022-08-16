@@ -11,37 +11,11 @@ import {
     GetSlug,
 } from './utils'
 import moment from 'moment'
-import { GetMintsRedeemsAndSwaps, GetNFTxTokens } from './utils/NFTx';
+import { GetMintsRedeemsAndSwaps, GetNFTxTokens, NFTxToken } from './utils/NFTx';
 
-import {ethers, providers} from 'ethers';
-import { RouterABI } from './_abis/router';
+import {ethers} from 'ethers';
 import fs from 'fs';
-
-type NFTxToken = {
-    id: string;
-    derivedEth: string;
-    quotePairs: Array<string>;
-    basePairs: Array<{
-      id: string;
-      reserve0: string;
-      token0: {
-        id: string;
-      };
-      token1: {
-        id: string;
-      };
-      reserve1: string;
-    }>
-  }
-
-
-const provider = new providers.JsonRpcProvider("https://rpc.ankr.com/eth")
-
-const routerContract = new ethers.Contract(
-    "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D",
-    RouterABI,
-    provider
-);
+import { routerContract } from './routerContract';
 
 
 main();
@@ -64,21 +38,24 @@ async function main(retry = 0) {
         const collections = await GetAllSudoSwapCollections();
         console.log(`Found ${collections.length} collections on SudoSwap...`);
         // second step, get all collections from NFTx
-        return GetNFTxTokens().then(x => {
-            console.log(`Found ${x.length} NFTx tokens...`);
+        return GetNFTxTokens().then(NFTxTokens => {
+            
+            console.log(`Found ${NFTxTokens.length} NFTx tokens...`);
             console.log(`Filtering out tokens with no token liquidity...`);
-            const ys = x.filter((y: NFTxToken) => Number(y.basePairs[0]?.reserve0 || 0) > 1);
-            console.log(`Found ${ys.length} NFTx tokens with token liquidity...`);
-            // const zs = ys.filter((y: NFTxToken) => collections.some(x => x.address === y.id));
-            let promiseYs = ys.map(async (y: NFTxToken) => {
-                let vaultId = y.id;
-                let {reserve0, reserve1} = y.basePairs[0];
+            
+            const tokens = NFTxTokens.filter((token: NFTxToken) => Number(token.basePairs[0]?.reserve0 || 0) > 1);
+
+            console.log(`Found ${tokens.length} NFTx tokens with token liquidity...`);
+
+            let ExtendedTokens = tokens.map(async (token: NFTxToken) => {
+                let vaultId = token.id;
+                let {reserve0, reserve1} = token.basePairs[0];
                 let r0 = ethers.utils.parseEther(reserve0);
                 let r1 = ethers.utils.parseEther(reserve1);
                 // using the router contract calculate the amount of wETH needed to buy 1 token
                 return routerContract.getAmountIn(ethers.utils.parseEther("1"), r1, r0).then((amount: number) => {
                     return {
-                        ...y,
+                        ...token,
                         wethPrice: ethers.utils.formatEther(amount)
                     }
                 }).then(async (y: any) => {
@@ -94,20 +71,20 @@ async function main(retry = 0) {
                     console.error(err);
                 })
             })
-            Promise.all(promiseYs).then(x => x.filter(y => !!y.asset))
-            .then(ys => {
+            Promise.all(ExtendedTokens).then(Tokens => Tokens.filter(ExtendedToken => !!ExtendedToken.asset))
+            .then(Tokens => {
                 // filter out any tokens that aren't in SudoSwap
-                const zs = ys.filter((y: any) => collections.some(x => x.address.toLowerCase() === y.asset?.toLowerCase()));
-                console.log(`Found ${zs.length} NFTx tokens that also are in SudoSwap...`);
-                return zs.map(y => { 
+                const FilteredTokens = Tokens.filter((Token: any) => collections.some(collection => collection.address.toLowerCase() === Token.asset?.toLowerCase()));
+                console.log(`Found ${FilteredTokens.length} NFTx tokens that also are in SudoSwap...`);
+                return FilteredTokens.map(FilteredToken => { 
                     return {
-                        ...y,
-                        collection: collections.find(x => x.address.toLowerCase() === y.asset.toLowerCase())
+                        ...FilteredToken,
+                        collection: collections.find(x => x.address.toLowerCase() === FilteredToken.asset.toLowerCase())
                     }
                 })
-            }).then((ys) => {
+            }).then((Tokens) => {
                 // return all tokens that have a price below the AMM price
-                const zs = ys.filter((y: any, index) => {
+                const ProfitableTokens = Tokens.filter((y: any, index) => {
                     if(!y.collection) {
                         console.log(index, false)
                         return false;
@@ -117,22 +94,23 @@ async function main(retry = 0) {
                     const sell_quote_formatted = Number(ethers.utils.formatEther(Math.floor(sell_quote / 1e9))) * 1e9;
                     return (sell_quote_formatted - 0.005) > Number(wethPrice);
                 });
-                return zs;
+                return ProfitableTokens;
             })
-            .then(ys => {
+            .then(ProfitableTokens => {
 
-                console.log(`Found ${ys.length} NFTx tokens that are above the AMM price...`);
+                console.log(`Found ${ProfitableTokens.length} NFTx tokens that are above the AMM price...`);
                 console.log(`Finished! Took ${moment().diff(initTime, 'seconds')}s`);
-                console.table(ys.map(y => {
-                    let sell_quote = y.collection?.sell_quote;
+                
+                console.table(ProfitableTokens.map(Token => {
+                    let sell_quote = Token.collection?.sell_quote;
                     const sell_quote_formatted = Number(ethers.utils.formatEther(Math.floor(sell_quote / 1e9))) * 1e9;
 
 
-                    const difference = sell_quote_formatted - Number(y.wethPrice);
+                    const difference = sell_quote_formatted - Number(Token.wethPrice);
                     return {
-                        collection: y.collection?.name,
-                        address: y.asset,
-                        NFTxPrice: Number(y.wethPrice).toFixed(5),
+                        collection: Token.collection?.name,
+                        address: Token.asset,
+                        NFTxPrice: Number(Token.wethPrice).toFixed(5),
                         SudoSwapPrice: sell_quote_formatted.toFixed(5),
                         difference: difference,
                         profitAfterGas: difference - 0.005,
@@ -144,7 +122,7 @@ async function main(retry = 0) {
                     fs.mkdirSync("./output");
                 }
                 // write data to file
-                fs.writeFileSync("./output/NFTx.json", JSON.stringify(ys, null, 4));
+                fs.writeFileSync("./output/NFTx.json", JSON.stringify(ProfitableTokens, null, 4));
                 console.log(`Output written to ${process.cwd()}\\output\\NFTx.json`);
                 console.log(`\nThanks for using NFTxArbitrage! \n~ CreativeBuilds ♥\n`);
             })

@@ -1,6 +1,6 @@
 // includes all code needed to fetch data from NFTx
 
-export const GetNFTxTokens = async () => {
+export const GetNFTxTokens = async (): Promise<Array<NFTxToken>> => {
     return fetch("https://graph-proxy.nftx.xyz/c/gateway/api/690cf8d6987a151008c2536454bd3d7a/subgraphs/id/D7azkFFPFT5H8i32ApXLr34UQyBfxDAfKoCEK4M832M6", {
         "headers": {
             "accept": "*/*",
@@ -33,3 +33,20 @@ export const GetMintsRedeemsAndSwaps = async (vaultId: string, dateGreaterThan: 
         "credentials": "omit"
       }).then(x => x.json()).then(x => x.data);
 }
+
+export type NFTxToken = {
+    id: string;
+    derivedEth: string;
+    quotePairs: Array<string>;
+    basePairs: Array<{
+      id: string;
+      reserve0: string;
+      token0: {
+        id: string;
+      };
+      token1: {
+        id: string;
+      };
+      reserve1: string;
+    }>
+  };
